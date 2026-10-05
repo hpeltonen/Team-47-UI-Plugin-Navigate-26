@@ -1,0 +1,193 @@
+:host {
+  display: block;
+}
+
+// Brand colors kept as literals. The dark gradient (black -> deep navy ->
+// violet -> magenta) is sampled from SailPoint's marketing artwork, and the
+// sky-blue node/link accent and the teal node have no close SPDS primitive, so
+// they stay bespoke. The magenta node instead uses --spds-pink-500 directly
+// (see .c-node--magenta), which is an exact match.
+$hero-ink: #04060f;
+$hero-navy: #071233;
+$hero-blue-bright: #3d9bff;
+$hero-teal: #00b3a4;
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  min-height: 11rem;
+  padding: 2rem 2.25rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--spds-border-radius-lg);
+  background: $hero-ink;
+
+  &__backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+
+    // Diagonal brand gradient: near-black in the top-left, warming through deep
+    // navy and violet to a magenta glow anchored in the bottom-right corner.
+    // A shallow ~120deg angle keeps the colour bands from reading as a hard 45.
+    background:
+      radial-gradient(
+        130% 150% at 102% 112%,
+        rgba(236, 24, 205, 0.72) 0%,
+        rgba(196, 32, 190, 0.42) 18%,
+        rgba(120, 40, 190, 0.2) 38%,
+        transparent 58%
+      ),
+      radial-gradient(
+        120% 130% at 80% 100%,
+        rgba(106, 46, 201, 0.45) 0%,
+        transparent 55%
+      ),
+      linear-gradient(
+        118deg,
+        $hero-ink 0%,
+        $hero-navy 42%,
+        #0d1747 74%,
+        #121d55 100%
+      );
+  }
+
+  // Connected-node "identity constellation": anchored to the right, masked so it
+  // fades out toward the left behind the copy. Each node drifts on its own slow
+  // path (driven in hero.component.ts); the lines follow because both are drawn
+  // from the same node coordinates.
+  //
+  // The width is a fixed pixel value rather than a percentage so the "slice"
+  // scale stays constant and the nodes render at the same size on every
+  // resolution. 900px reproduces the reference scale from a ~1592px viewport;
+  // on narrower heroes the artwork simply overhangs to the left, where the mask
+  // and the hero's overflow clip it.
+  &__constellation {
+    position: absolute;
+    inset: 0 0 0 auto;
+    z-index: 0;
+    width: 900px;
+    height: 100%;
+    pointer-events: none;
+    -webkit-mask-image: linear-gradient(to left, #000 28%, transparent 92%);
+    mask-image: linear-gradient(to left, #000 28%, transparent 92%);
+  }
+
+  &__content {
+    position: relative;
+    z-index: 1;
+    max-width: 34rem;
+  }
+
+  &__eyebrow {
+    display: inline-block;
+    margin-bottom: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: $hero-blue-bright;
+  }
+
+  &__title {
+    margin: 0 0 0.5rem;
+    font-size: clamp(1.75rem, 2.5vw, 2.5rem);
+    font-weight: 700;
+    line-height: 1.1;
+    color: #fff;
+    // White fading to a soft brand blue for a subtle sheen against the dark.
+    background: linear-gradient(90deg, #ffffff 0%, #cfe4ff 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  &__subtitle {
+    margin: 0;
+    max-width: 45ch;
+    font-size: 1rem;
+    line-height: 1.5;
+    color: rgba(255, 255, 255, 0.82);
+  }
+}
+
+// Some browsers cannot clip a gradient to text; keep the title visible there.
+@supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+  .hero__title {
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    color: #fff;
+  }
+}
+
+.c-edges line {
+  stroke: $hero-blue-bright;
+  stroke-width: 0.6;
+  opacity: 0.45;
+}
+
+.c-nodes circle {
+  fill: $hero-blue-bright;
+  opacity: 0.9;
+  // Slight, staggered twinkle so the field feels alive but calm.
+  animation: c-twinkle 6s ease-in-out infinite;
+
+  &:nth-child(4n) {
+    animation-delay: 0s;
+  }
+  &:nth-child(4n + 1) {
+    animation-delay: 1.5s;
+  }
+  &:nth-child(4n + 2) {
+    animation-delay: 3s;
+  }
+  &:nth-child(4n + 3) {
+    animation-delay: 4.5s;
+  }
+}
+
+// Scoped with the parent class so these win over `.c-nodes circle`, which
+// otherwise outranks a lone variant class and would keep the accents blue.
+.c-nodes circle.c-node--magenta {
+  fill: var(--spds-pink-500, #cc27b0);
+}
+
+.c-nodes circle.c-node--teal {
+  fill: $hero-teal;
+}
+
+@keyframes c-twinkle {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.95;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .c-nodes circle {
+    animation: none;
+  }
+}
+
+// Below this width the constellation is dropped and the copy takes the full
+// hero width, so the text never competes with the artwork on narrow screens.
+@media (max-width: 960px) {
+  .hero__constellation {
+    display: none;
+  }
+
+  .hero__content {
+    max-width: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .hero {
+    padding: 1.5rem;
+  }
+}

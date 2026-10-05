@@ -1,0 +1,17 @@
+<app-hero />
+
+<section>
+  <h2 class="spds-h4">{{ 'overview.heading' | translate }}</h2>
+  <p>{{ 'overview.intro' | translate }}</p>
+
+  <h3 class="spds-h5">{{ 'overview.whatHeading' | translate }}</h3>
+  <ul>
+    <li>{{ 'overview.whatItem1' | translate }}</li>
+    <li>{{ 'overview.whatItem2' | translate }}</li>
+    <li>{{ 'overview.whatItem3' | translate }}</li>
+  </ul>
+  <p>{{ 'overview.patterns' | translate }}</p>
+
+  <h3 class="spds-h5">{{ 'overview.gettingStartedHeading' | translate }}</h3>
+  <p [innerHTML]="'overview.gettingStartedBody' | translate"></p>
+</section>

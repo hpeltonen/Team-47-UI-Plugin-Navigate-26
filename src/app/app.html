@@ -1,0 +1,233 @@
+<main class="page">
+  <header class="page__header">
+    <div>
+      <h1 class="page__title">Access Arena</h1>
+      <p class="page__subtitle">
+        Nobody gets offboarded in this tenant without earning it. Pick a manager, challenge a direct report,
+        and win the bout to move them to a new lifecycle state. For real.
+      </p>
+    </div>
+    @if (plugin.context(); as ctx) {
+      <div class="page__meta">
+        <p-tag severity="secondary" [value]="ctx.tenant.org" />
+        <span class="page__user">{{ ctx.user.displayName }}</span>
+      </div>
+    }
+  </header>
+
+  @if (plugin.status() === 'failed') {
+    <p-message severity="warn">
+      No App Shell handshake, so there is no tenant behind this page. Open the <code>?spPluginDev=</code> URL
+      from <code>sail ui-plugins link</code> for live data, or run a practice bout below.
+    </p-message>
+  }
+  @if (error()) {
+    <p-message severity="error" [text]="error()" />
+  }
+
+  @if (phase() === 'fight' || phase() === 'result') {
+    @if (bout(); as b) {
+      @for (k of [roundKey()]; track k) {
+        <app-arena [manager]="b.manager" [report]="b.report" (ended)="onFightEnded($event)" />
+      }
+    }
+  }
+
+  @switch (phase()) {
+    @case ('pick') {
+      @if (practiceOnly()) {
+        <p-button label="Practice bout (no tenant)" (onClick)="practiceFight()" />
+      } @else {
+        <section class="picker">
+          <label class="picker__label" for="manager">Manager</label>
+          @if (loading()) {
+            <p-skeleton height="2.6rem" width="22rem" />
+          } @else {
+            <p-select
+              inputId="manager"
+              [options]="managers()"
+              optionLabel="name"
+              optionValue="id"
+              [ngModel]="selectedManagerId()"
+              (onChange)="onManagerChange($event.value)"
+              [filter]="true"
+              filterBy="name"
+              [showClear]="true"
+              placeholder="Select a manager"
+              emptyMessage="No identities in this tenant have a manager set"
+              styleClass="picker__select"
+            />
+            <small class="picker__hint">{{ managers().length }} managers · {{ identities().length }} identities loaded</small>
+          }
+        </section>
+
+        @if (selectedManagerId()) {
+          <p-table
+            [value]="reports()"
+            [paginator]="reports().length > 10"
+            [rows]="10"
+            sortField="name"
+            [sortOrder]="1"
+            styleClass="p-datatable-sm"
+            [tableStyle]="{ 'min-width': '40rem' }"
+          >
+            <ng-template #caption>
+              <div class="table-caption">
+                <span class="spds-h5--semibold">Direct reports</span>
+                <p-tag severity="contrast" [value]="reports().length + ''" />
+                <span class="table-caption__hint">Pick your opponent.</span>
+              </div>
+            </ng-template>
+
+            <ng-template #header>
+              <tr>
+                <th pSortableColumn="name">Name <p-sortIcon field="name" /></th>
+                <th>Email</th>
+                <th>Department</th>
+                <th>Lifecycle state</th>
+                <th></th>
+              </tr>
+            </ng-template>
+
+            <ng-template #body let-person>
+              <tr>
+                <td>
+                  <div class="cell-person">
+                    <p-avatar [label]="initials(person.name)" shape="circle" />
+                    <span>{{ person.name }}</span>
+                  </div>
+                </td>
+                <td>{{ person.emailAddress || '-' }}</td>
+                <td>{{ attr(person, 'department') }}</td>
+                <td><p-tag severity="secondary" [value]="lifecycle(person) || '-'" /></td>
+                <td class="cell-action">
+                  <p-button label="Challenge" size="small" severity="danger" (onClick)="challenge(person)" />
+                </td>
+              </tr>
+            </ng-template>
+
+            <ng-template #emptymessage>
+              <tr>
+                <td colspan="5" class="cell-empty">This manager has no direct reports in the loaded identities.</td>
+              </tr>
+            </ng-template>
+          </p-table>
+        }
+      }
+    }
+
+    @case ('loading') {
+      <section class="tape">
+        <p-skeleton height="8rem" />
+        <p class="picker__hint">Pulling both fighters' access from Search and the report's lifecycle states…</p>
+      </section>
+    }
+
+    @case ('prefight') {
+      @if (bout(); as b) {
+        <section class="tape">
+          <h2 class="spds-h4--semibold tape__title">Tale of the tape</h2>
+          <div class="tape__grid">
+            <div class="tape__fighter tape__fighter--manager">
+              <p-avatar [label]="initials(b.manager.name)" shape="circle" size="xlarge" />
+              <strong>{{ b.manager.name }}</strong>
+              <span class="tape__role">Manager</span>
+              <ul>
+                <li><b>{{ b.manager.entitlementCount }}</b> entitlements → health</li>
+                <li><b>{{ b.manager.roleCount }}</b> roles → armour</li>
+                <li><b>{{ b.manager.privilegedCount }}</b> privileged → weapon</li>
+                <li><b>{{ b.manager.directReports }}</b> direct reports → minions</li>
+              </ul>
+            </div>
+            <div class="tape__vs">VS</div>
+            <div class="tape__fighter tape__fighter--report">
+              <p-avatar [label]="initials(b.report.name)" shape="circle" size="xlarge" />
+              <strong>{{ b.report.name }}</strong>
+              <span class="tape__role">{{ b.reportProfile.lifecycleState || 'no lifecycle state' }} · {{ b.reportProfile.identityProfileName || 'no profile' }}</span>
+              <ul>
+                <li><b>{{ b.report.entitlementCount }}</b> entitlements → health</li>
+                <li><b>{{ b.report.roleCount }}</b> roles → armour</li>
+                <li><b>{{ b.report.privilegedCount }}</b> privileged → weapon</li>
+                <li><b>{{ b.reportProfile.accountCount }}</b> accounts at stake</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="tape__stakes">
+            <label class="picker__label" for="target-state">If the manager wins, move {{ b.report.name }} to</label>
+            @if (stateOptions().length) {
+              <p-select
+                inputId="target-state"
+                [options]="stateOptions()"
+                optionLabel="label"
+                optionValue="id"
+                [ngModel]="targetStateId()"
+                (onChange)="targetStateId.set($event.value ?? '')"
+                placeholder="Choose a lifecycle state"
+                styleClass="picker__select"
+              />
+              <small class="picker__hint">
+                This calls the real set-lifecycle-state API on the tenant. Account actions configured on that state will run.
+              </small>
+            }
+            @if (nowhereToGo()) {
+              <p-message severity="warn">
+                {{ b.report.name }} is already in the only enabled lifecycle state on the
+                <strong>{{ b.reportProfile.identityProfileName }}</strong> profile, so there is nowhere to send them.
+                @if (disabledStates().length) {
+                  Disabled on that profile:
+                  @for (s of disabledStates(); track s.id) {
+                    <p-tag severity="secondary" [value]="s.name || s.technicalName" />
+                  }
+                  Enable one under Admin → Identities → Identity Profiles → {{ b.reportProfile.identityProfileName }} → Provisioning → Lifecycle States, then challenge again.
+                }
+              </p-message>
+            } @else if (disabledStates().length) {
+              <small class="picker__hint">
+                Not offered because they are disabled on this profile:
+                @for (s of disabledStates(); track s.id) {
+                  {{ s.name || s.technicalName }}{{ $last ? '' : ', ' }}
+                }
+              </small>
+            }
+          </div>
+
+          <div class="tape__actions">
+            <p-button label="FIGHT" severity="danger" size="large" [disabled]="nowhereToGo() || (stateOptions().length > 0 && !targetStateId())" (onClick)="startFight()" />
+            <p-button label="Back" severity="secondary" [text]="true" (onClick)="backToPick()" />
+          </div>
+        </section>
+      }
+    }
+
+    @case ('fight') {
+      <!-- The arena itself is rendered below the switch so it survives the fight → result transition. -->
+    }
+
+    @case ('result') {
+      @if (bout(); as b) {
+        <section class="verdict">
+          @if (outcome() === 'manager') {
+            @if (terminating()) {
+              <p-message severity="info" text="Calling set-lifecycle-state…" />
+            } @else if (termination(); as t) {
+              <p-message [severity]="t.ok ? 'success' : 'warn'">
+                {{ t.message }}
+                @if (t.activityId) {
+                  <span class="verdict__activity">Account activity {{ t.activityId }}</span>
+                }
+              </p-message>
+            }
+          } @else {
+            <p-message severity="error" [text]="b.report.name + ' keeps every entitlement. Access retained.'" />
+          }
+          <div class="tape__actions">
+            <p-button label="Rematch" (onClick)="rematch()" />
+            <p-button label="Pick another report" severity="secondary" [text]="true" (onClick)="backToPick()" />
+          </div>
+        </section>
+      }
+    }
+  }
+
+</main>

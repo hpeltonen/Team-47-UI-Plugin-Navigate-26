@@ -1,0 +1,28 @@
+{
+    "version": 1,
+    "manifest": {
+        "alias": "offboarding-arena",
+        "name": {
+            "en": "Access Arena"
+        },
+        "description": {
+            "en": "Offboarding, but you have to earn it. A manager fights a direct report in a stick figure arena built from live identity data; winning moves the report to a new lifecycle state."
+        },
+        "apiScopes": [
+            "sp:scopes:all"
+        ],
+        "contentSecurityPolicies": {},
+        "permissionPolicy": {},
+        "iframeAllow": {},
+        "state": "ENABLED",
+        "slots": [
+            {
+                "slotId": "full-page"
+            }
+        ]
+    },
+    "build": {
+        "outDir": "./dist/manager-lookup-hack-day/browser",
+        "port": 4200
+    }
+}

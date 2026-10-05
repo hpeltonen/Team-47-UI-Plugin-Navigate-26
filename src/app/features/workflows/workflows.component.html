@@ -1,0 +1,64 @@
+<section>
+  <h2 class="spds-h4">{{ 'workflows.heading' | translate }}</h2>
+  <p>{{ 'workflows.intro' | translate }}</p>
+
+  <p-button
+    [label]="'workflows.loadButton' | translate"
+    (onClick)="loadLaunchers()"
+    [loading]="loading()"
+    [disabled]="loading() || !apiReady()"
+  />
+
+  @if (error()) {
+    <p class="error">{{ error() }}</p>
+  }
+
+  @if (launchers().length > 0) {
+    <h3 class="spds-h5">{{ 'workflows.availableHeading' | translate }}</h3>
+    <ul class="launcher-list">
+      @for (launcher of launchers(); track launcher.id) {
+        <li class="launcher-item">
+          <div class="launcher-item__info">
+            <strong>{{ launcher.name }}</strong>
+            @if (launcher.disabled) {
+              <p-tag [value]="'workflows.disabled' | translate" severity="secondary" />
+            }
+            @if (launcher.description) {
+              <p class="launcher-item__description">{{ launcher.description }}</p>
+            }
+          </div>
+          <p-button
+            [label]="'workflows.startButton' | translate"
+            severity="secondary"
+            [loading]="startingId() === launcher.id"
+            [disabled]="launcher.disabled || startingId() !== null || !apiReady()"
+            (onClick)="startLauncher(launcher)"
+          />
+        </li>
+      }
+    </ul>
+  } @else if (!loading() && !error()) {
+    <p class="empty-state">{{ 'workflows.emptyState' | translate }}</p>
+  }
+
+  @if (startError()) {
+    <p class="error">{{ startError() }}</p>
+  }
+
+  @if (interactiveProcessId()) {
+    <div class="launch-result">
+      <h3 class="spds-h5">{{ 'workflows.startedHeading' | translate }}</h3>
+      <p>
+        <strong>{{ 'workflows.processIdLabel' | translate }}</strong>
+        <code>{{ interactiveProcessId() }}</code>
+      </p>
+      @if (interactiveProcessUrl(); as url) {
+        <p>
+          <a [href]="url" target="_blank" rel="noopener">
+            {{ 'workflows.openInLaunchpad' | translate }}
+          </a>
+        </p>
+      }
+    </div>
+  }
+</section>

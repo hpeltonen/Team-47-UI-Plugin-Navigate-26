@@ -1,0 +1,52 @@
+{
+  "nav": {
+    "overview": "Overview",
+    "workflows": "Workflows",
+    "apiExamples": "API Examples"
+  },
+  "status": {
+    "pending": "Pending",
+    "ready": "Ready",
+    "failed": "Failed"
+  },
+  "hero": {
+    "eyebrow": "SailPoint UI Plugin",
+    "title": "Welcome to Your UI Plugin",
+    "subtitle": "Your plugin renders as a native micro-frontend inside Identity Security Cloud; it rides the tenant's session and security model, so there is no separate login and nothing extra to host. Explore the examples, then make it your own."
+  },
+  "overview": {
+    "heading": "Build native experiences inside Identity Security Cloud",
+    "intro": "Your plugin renders as a micro-frontend right inside Identity Security Cloud. It rides the tenant's session and security model, so there is no separate login, no external hosting, and nothing extra to secure.",
+    "whatHeading": "What can you build?",
+    "whatItem1": "Dashboards that bring together data from any Identity Security Cloud API",
+    "whatItem2": "One-click workflow launchers that kick off your business processes",
+    "whatItem3": "Admin tools tuned to your organization's governance needs",
+    "patterns": "The pages in this template show the patterns you will use every day: reading plugin context, calling Identity Security Cloud APIs with typed SDK services, and launching workflows through the Launchers API.",
+    "gettingStartedHeading": "Getting started",
+    "gettingStartedBody": "This template is yours to reshape. The SDK wiring in <code>core/</code> handles the App Shell handshake, so components simply read signals and call services. Open the <strong>Workflows</strong> tab to see how to list and start launchers, and the <strong>API Examples</strong> tab for the Observable and Promise patterns when calling Identity Security Cloud APIs."
+  },
+  "workflows": {
+    "heading": "Workflow Launchers",
+    "intro": "UI plugins can start SailPoint Workflows through the Launchers API. This page lists launchers assigned to you (via Launchpad) and lets you start one. The workflow runs server-side; the plugin receives an Interactive Process ID that links to the Launchpad for any interactive steps.",
+    "loadButton": "Load My Launchers",
+    "availableHeading": "Available Launchers",
+    "disabled": "Disabled",
+    "startButton": "Start",
+    "emptyState": "No launchers found. Launchers are assigned to users through the Launchpad configuration in Identity Security Cloud. If you expect to see launchers here, verify your Launchpad assignments.",
+    "startedHeading": "Launcher Started",
+    "processIdLabel": "Interactive Process ID:",
+    "openInLaunchpad": "Open in Launchpad →"
+  },
+  "apiExamples": {
+    "heading": "API Examples",
+    "intro": "The SailPoint Angular SDK provides typed services for calling ISC APIs. This page demonstrates two patterns: <strong>Observable</strong> (for reactive pipelines and template binding) and <strong>Promise</strong> (for event handlers and sequential chains).",
+    "observableHeading": "Observable Pattern",
+    "observableBody": "<code>IdentitiesService.listIdentitiesV1()</code> returns an Observable. Use it with <code>AsyncPipe</code> for automatic subscription management. A gate signal controls when the Observable is subscribed.",
+    "observableHint": "Prefer Observables when: binding results directly to templates, chaining multiple async operations reactively, or when you need cancellation on component destroy.",
+    "observableButton": "List Identities (Observable)",
+    "promiseHeading": "Promise Pattern",
+    "promiseBody": "<code>TenantService.getTenantV1()</code> wrapped with <code>firstValueFrom()</code> converts the Observable to a Promise. Useful for event handlers and <code>async/await</code> chains.",
+    "promiseHint": "Prefer Promises when: responding to user actions in event handlers, writing sequential async logic, or integrating with Promise-based libraries.",
+    "promiseButton": "Get Tenant (Promise)"
+  }
+}

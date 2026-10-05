@@ -1,0 +1,38 @@
+<div class="hero">
+  <div class="hero__backdrop" aria-hidden="true"></div>
+
+  <svg
+    class="hero__constellation"
+    viewBox="0 0 600 320"
+    preserveAspectRatio="xMaxYMid slice"
+    aria-hidden="true"
+  >
+    <g class="c-edges">
+      @for (edge of edges; track $index) {
+        <line
+          [attr.x1]="nodes[edge[0]].x"
+          [attr.y1]="nodes[edge[0]].y"
+          [attr.x2]="nodes[edge[1]].x"
+          [attr.y2]="nodes[edge[1]].y"
+        />
+      }
+    </g>
+    <g class="c-nodes">
+      @for (node of nodes; track $index) {
+        <circle
+          [attr.cx]="node.x"
+          [attr.cy]="node.y"
+          [attr.r]="node.r"
+          [class.c-node--magenta]="node.variant === 'magenta'"
+          [class.c-node--teal]="node.variant === 'teal'"
+        />
+      }
+    </g>
+  </svg>
+
+  <div class="hero__content">
+    <span class="hero__eyebrow">{{ 'hero.eyebrow' | translate }}</span>
+    <p class="hero__title">{{ 'hero.title' | translate }}</p>
+    <p class="hero__subtitle">{{ 'hero.subtitle' | translate }}</p>
+  </div>
+</div>
