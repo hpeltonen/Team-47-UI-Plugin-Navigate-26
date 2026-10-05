@@ -1,6 +1,6 @@
-import { ArenaGame, hashSeed, makeFighter, type FighterStats, type Input, type Outcome } from './game';
+import { ArenaGame, NO_INPUT, hashSeed, makeFighter, type FighterStats, type Input, type Outcome } from './game';
 
-const NONE: Input = { left: false, right: false, punch: false, block: false };
+const NONE: Input = NO_INPUT;
 
 function stats(overrides: Partial<FighterStats> = {}): FighterStats {
   return {
@@ -12,6 +12,7 @@ function stats(overrides: Partial<FighterStats> = {}): FighterStats {
     privilegedCount: 0,
     directReports: 0,
     subtitle: '',
+    entitlementNames: ['Slack Member', 'VPN Users', 'Jira Developer'],
     ...overrides,
   };
 }
@@ -96,6 +97,73 @@ describe('ArenaGame', () => {
     simulate(game, () => ({ ...NONE, right: true }), 10);
     expect(game.manager.x).toBeLessThan(game.report.x);
     expect(game.report.x - game.manager.x).toBeGreaterThanOrEqual(36);
+  });
+
+  it('fires a heavy when the attack button is held past the threshold, and it breaks a block', () => {
+    const game = new ArenaGame(stats({ privilegedCount: 2 }), stats({ entitlementCount: 40 }), events);
+    const sounds: string[] = [];
+    (game as unknown as { events: { onSound: (n: string) => void } }).events.onSound = (n) => sounds.push(n);
+    let holding = 0;
+    simulate(game, (g, t) => {
+      const dist = Math.abs(g.report.x - g.manager.x);
+      if (hits.length >= 1) return NONE;
+      if (dist > g.manager.reach - 6) return { ...NONE, right: true };
+      // Press once, hold for 0.7s, release.
+      if (holding === 0) { holding = t; return { ...NONE, punch: true, punchHeld: true }; }
+      return { ...NONE, punchHeld: t - holding < 0.7 };
+    }, 15);
+    expect(sounds).toContain('heavy');
+    expect(hits.length).toBe(1);
+    // Heavy damage is 2.5x the base damage (4 for two privileged entitlements).
+    expect(hits[0].amount).toBe(10);
+  });
+
+  it('lets a jump kick land over a block for full damage', () => {
+    const game = new ArenaGame(stats(), stats({ entitlementCount: 40 }), events);
+    // Force the bot to block forever.
+    (game as unknown as { botInput: () => Input }).botInput = () => ({ ...NONE, block: true });
+    let jumped = false;
+    simulate(game, (g) => {
+      const dist = Math.abs(g.report.x - g.manager.x);
+      if (hits.length >= 1) return NONE;
+      if (dist > 70) return { ...NONE, right: true };
+      if (!jumped) { jumped = true; return { ...NONE, up: true, right: true }; }
+      return g.manager.action === 'jump' ? { ...NONE, punch: true } : NONE;
+    }, 10);
+    expect(hits.length).toBe(1);
+    expect(hits[0].amount).toBe(4);
+  });
+
+  it('knocks real entitlement names loose and freezes the frame on a hit', () => {
+    const game = new ArenaGame(stats({ privilegedCount: 4 }), stats({ entitlementCount: 40 }), events);
+    let hitStopAfterHit = 0;
+    let namesAfterHit: string[] = [];
+    simulate(game, (g) => {
+      const dist = Math.abs(g.report.x - g.manager.x);
+      if (hits.length >= 1) {
+        // First controller call after the landing frame: the freeze has not ticked yet.
+        if (!hitStopAfterHit) {
+          hitStopAfterHit = g.hitStop;
+          namesAfterHit = g.particles.filter((p) => p.size).map((p) => p.text ?? '');
+        }
+        return NONE;
+      }
+      return dist > g.manager.reach - 6 ? { ...NONE, right: true } : { ...NONE, punch: true };
+    }, 10);
+    expect(hitStopAfterHit).toBeGreaterThan(0);
+    expect(namesAfterHit).toContain('Slack Member');
+  });
+
+  it('counts consecutive hits as a combo and drops it once the window passes', () => {
+    const game = new ArenaGame(stats({ privilegedCount: 2 }), stats({ entitlementCount: 60 }), events);
+    simulate(game, (g) => {
+      const dist = Math.abs(g.report.x - g.manager.x);
+      if (hits.length >= 3) return NONE;
+      return dist > g.manager.reach - 6 ? { ...NONE, right: true } : { ...NONE, punch: true };
+    }, 10);
+    expect(game.manager.bestCombo).toBeGreaterThanOrEqual(2);
+    // Ten seconds of standing still is well past the combo window.
+    expect(game.manager.combo).toBe(0);
   });
 
   it('hashes seeds stably so the same person always gets the same face', () => {

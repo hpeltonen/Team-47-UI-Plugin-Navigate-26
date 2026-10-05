@@ -49,10 +49,15 @@ All calls go through the typed `@sailpoint/angular-sdk` services with the scoped
 | Key | Action |
 | --- | --- |
 | Left and right arrows, or A and D | Move |
-| Space, or J | Punch |
-| Shift, or K | Block. A blocked punch does a fifth of its damage. |
+| Up arrow, or W | Jump |
+| Space, or J | Punch. Tap for a jab. |
+| Hold Space, then release | Heavy. Slow, two and a half times the damage, breaks a block and launches the target. Privileged access shortens the wind-up. |
+| Space while in the air | Jump kick. Comes in over a block for full damage. |
+| Shift, or K | Block. A blocked jab does a fifth of its damage. |
 
 Click the arena once to give it keyboard focus. The round lasts sixty seconds. If the clock runs out, whoever has the larger share of health left wins.
+
+Landing a hit freezes the frame for a moment and knocks one of the target's real entitlement names loose, so the punches read as access being stripped. Consecutive hits build a combo, and the announcer calls counters, guard breaks and a perfect K.O. Sound effects are synthesised with the Web Audio API, so there are no audio files to host. The button under the arena mutes them.
 
 ## Project layout
 
@@ -60,6 +65,7 @@ Click the arena once to give it keyboard focus. The round lasts sixty seconds. I
 | --- | --- |
 | `src/app/arena/game.ts` | The engine: fighters, physics, bot, particles, drawing, procedural avatars. Plain TypeScript with no Angular. |
 | `src/app/arena/game.spec.ts` | Headless simulations of full bouts: a punching manager wins, roles absorb hits first, the clock ends a round, fighters stay inside the arena. |
+| `src/app/arena/sfx.ts` | Synthesised sound effects. Oscillators and filtered noise, no audio files. |
 | `src/app/arena/arena.component.ts` | Canvas host. Runs the animation loop and keyboard outside Angular's zone so sixty frames a second never trigger change detection. |
 | `src/app/core/fighter-stats.service.ts` | Search, lifecycle state listing, and the set-lifecycle-state call. |
 | `src/app/core/sailpoint-plugin.service.ts` | UI Plugin SDK wrapper from the starter. Handles the handshake and exposes context as signals. |

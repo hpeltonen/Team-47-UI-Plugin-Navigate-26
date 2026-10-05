@@ -205,6 +205,7 @@ export class App {
       privilegedCount: 5,
       directReports: 6,
       subtitle: '30 entitlements · 3 roles · 5 privileged',
+      entitlementNames: ['Domain Admins', 'Salesforce Admin', 'AWS PowerUser', 'Okta Super Admin', 'GitHub Owner', 'Payroll Approver'],
     };
     const report: FighterStats = {
       id: 'practice-report',
@@ -215,6 +216,7 @@ export class App {
       privilegedCount: 1,
       directReports: 0,
       subtitle: '22 entitlements · 2 roles · 1 privileged',
+      entitlementNames: ['Slack Member', 'Jira Developer', 'VPN Users', 'Confluence Editor', 'Workday Employee', 'Zoom Licensed', 'Dropbox Team'],
     };
     this.bout.set({
       manager,
@@ -222,7 +224,7 @@ export class App {
       reportProfile: {
         id: report.id, name: report.name, email: report.seed, entitlementCount: 22, roleCount: 2,
         accessProfileCount: 1, privilegedCount: 1, accountCount: 4, lifecycleState: 'active',
-        identityProfileId: '', identityProfileName: 'Practice',
+        identityProfileId: '', identityProfileName: 'Practice', entitlementNames: report.entitlementNames,
       },
       states: [],
     });
@@ -303,6 +305,7 @@ export class App {
       privilegedCount: p.privilegedCount,
       directReports,
       subtitle: `${p.entitlementCount} entitlements · ${p.roleCount} roles · ${p.privilegedCount} privileged`,
+      entitlementNames: p.entitlementNames,
     };
   }
 

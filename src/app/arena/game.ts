@@ -18,23 +18,45 @@ export interface FighterStats {
   entitlementCount: number;
   /** Armour. Every role absorbs one hit before health is touched. */
   roleCount: number;
-  /** Weapon. Privileged access swings a longer, harder weapon. */
+  /** Weapon. Privileged access swings a longer, harder weapon and charges faster. */
   privilegedCount: number;
   /** Minions for the manager. Each direct report is a tiny helper. */
   directReports: number;
   /** Label under the health bar. */
   subtitle: string;
+  /** Real entitlement names, knocked loose one per hit. */
+  entitlementNames: string[];
 }
 
-export type FighterAction = 'idle' | 'walk' | 'punch' | 'block' | 'hit' | 'down' | 'win';
+export type FighterAction =
+  | 'idle'
+  | 'walk'
+  | 'punch'
+  | 'charge'
+  | 'heavy'
+  | 'jump'
+  | 'kick'
+  | 'block'
+  | 'hit'
+  | 'down'
+  | 'win';
 export type Side = 'left' | 'right';
 
 export interface Input {
   left: boolean;
   right: boolean;
+  /** Jump, edge-triggered. */
+  up: boolean;
+  /** Attack button pressed this frame (edge). */
   punch: boolean;
+  /** Attack button currently held (level). Holding charges a heavy attack. */
+  punchHeld: boolean;
   block: boolean;
 }
+
+export const NO_INPUT: Input = { left: false, right: false, up: false, punch: false, punchHeld: false, block: false };
+
+export type SoundName = 'whoosh' | 'hit' | 'heavy' | 'block' | 'jump' | 'kick' | 'charge' | 'armour' | 'ko' | 'bell' | 'combo';
 
 export interface Fighter {
   stats: FighterStats;
@@ -42,20 +64,34 @@ export interface Fighter {
   x: number;
   y: number;
   vx: number;
+  vy: number;
   facing: 1 | -1;
   action: FighterAction;
   /** Seconds remaining in the current timed action. */
   actionTimer: number;
-  /** Set once per punch when the hit frame has been applied. */
-  punchLanded: boolean;
+  /** Set once per attack when the hit frame has been applied. */
+  attackLanded: boolean;
+  /** Seconds the attack button has been held during a charge. */
+  chargeTime: number;
   hp: number;
   maxHp: number;
   armour: number;
   maxArmour: number;
   reach: number;
   damage: number;
+  /** Seconds of holding before a punch becomes a heavy. Shorter with privilege. */
+  chargeThreshold: number;
   /** Walk cycle phase. */
   phase: number;
+  /** Landed hits in the current combo and how long until it drops. */
+  combo: number;
+  comboTimer: number;
+  /** Highest combo this round, for the verdict. */
+  bestCombo: number;
+  /** Set once the fighter has been hurt this round, for the PERFECT call. */
+  tookDamage: boolean;
+  /** Next entitlement name to knock loose. */
+  nextEntitlement: number;
   /** Bot only: seconds until the next decision. */
   thinkTimer: number;
   /** Bot only: the current plan. */
@@ -78,6 +114,8 @@ export interface Particle {
   life: number;
   text?: string;
   color: string;
+  size?: number;
+  spin?: number;
 }
 
 export type Outcome = 'manager' | 'report' | null;
@@ -85,16 +123,25 @@ export type Outcome = 'manager' | 'report' | null;
 export interface GameEvents {
   onHit(target: Side, amount: number, armour: boolean): void;
   onEnd(winner: Outcome): void;
+  onSound?(name: SoundName): void;
 }
 
 export const ARENA_W = 960;
 export const ARENA_H = 420;
 const FLOOR_Y = ARENA_H - 60;
 const WALK_SPEED = 260;
+const JUMP_V = 640;
+const GRAVITY = 1900;
 const PUNCH_TIME = 0.32;
 const PUNCH_HIT_AT = 0.14;
+const HEAVY_TIME = 0.6;
+const HEAVY_HIT_AT = 0.34;
+const KICK_TIME = 0.45;
+const KICK_HIT_AT = 0.08;
 const HIT_STUN = 0.35;
+const HEAVY_STUN = 0.6;
 const BLOCK_DAMAGE_MULT = 0.2;
+const COMBO_WINDOW = 1.3;
 const MIN_HP = 8;
 const MAX_HP = 60;
 const ROUND_SECONDS = 60;
@@ -135,20 +182,35 @@ export function makeFighter(stats: FighterStats, side: Side): Fighter {
     x: side === 'left' ? ARENA_W * 0.3 : ARENA_W * 0.7,
     y: FLOOR_Y,
     vx: 0,
+    vy: 0,
     facing: side === 'left' ? 1 : -1,
     action: 'idle',
     actionTimer: 0,
-    punchLanded: false,
+    attackLanded: false,
+    chargeTime: 0,
     hp: maxHp,
     maxHp,
     armour,
     maxArmour: armour,
     reach,
     damage,
+    chargeThreshold: Math.max(0.25, 0.5 - Math.min(0.25, stats.privilegedCount * 0.04)),
     phase: 0,
+    combo: 0,
+    comboTimer: 0,
+    bestCombo: 0,
+    tookDamage: false,
+    nextEntitlement: 0,
     thinkTimer: 0,
     plan: 'approach',
   };
+}
+
+interface Announcement {
+  text: string;
+  color: string;
+  life: number;
+  maxLife: number;
 }
 
 export class ArenaGame {
@@ -161,7 +223,15 @@ export class ArenaGame {
   /** Short "FIGHT!" banner at the start. */
   introTimer = 1.6;
   shake = 0;
+  /** Seconds the simulation is frozen after a landed hit. */
+  hitStop = 0;
+  /** Seconds of white flash left to draw. */
+  flash = 0;
+  /** Slow motion factor during the K.O. */
+  private slowMo = 1;
+  private announcement: Announcement | null = null;
   private ended = false;
+  private bellRung = false;
 
   constructor(
     managerStats: FighterStats,
@@ -185,15 +255,37 @@ export class ArenaGame {
   /** Advance the simulation by `dt` seconds with the player's input. */
   step(dt: number, input: Input): void {
     dt = Math.min(dt, 0.05);
+
+    // Cosmetic timers run on wall time so a freeze still feels like a freeze.
+    this.flash = Math.max(0, this.flash - dt);
+    this.shake = Math.max(0, this.shake - dt * 20);
+    if (this.announcement) {
+      this.announcement.life -= dt;
+      if (this.announcement.life <= 0) this.announcement = null;
+    }
+
     if (this.introTimer > 0) {
       this.introTimer -= dt;
+      if (this.introTimer <= 0.8 && !this.bellRung) {
+        this.bellRung = true;
+        this.sound('bell');
+      }
       this.updateParticles(dt);
       return;
     }
+
+    if (this.hitStop > 0) {
+      this.hitStop -= dt;
+      return;
+    }
+
+    dt *= this.slowMo;
     if (this.ended) {
+      this.slowMo = Math.min(1, this.slowMo + dt * 0.8);
       this.updateParticles(dt);
       this.updateMinions(dt);
-      this.shake = Math.max(0, this.shake - dt * 20);
+      this.applyPhysics(this.manager, dt);
+      this.applyPhysics(this.report, dt);
       return;
     }
 
@@ -201,16 +293,18 @@ export class ArenaGame {
     this.applyInput(this.manager, input, dt);
     this.applyInput(this.report, this.botInput(dt), dt);
 
-    this.move(this.manager, dt);
-    this.move(this.report, dt);
+    this.applyPhysics(this.manager, dt);
+    this.applyPhysics(this.report, dt);
     this.separate();
 
-    this.resolvePunch(this.manager, this.report);
-    this.resolvePunch(this.report, this.manager);
+    this.resolveAttack(this.manager, this.report);
+    this.resolveAttack(this.report, this.manager);
+
+    this.tickCombo(this.manager, dt);
+    this.tickCombo(this.report, dt);
 
     this.updateMinions(dt);
     this.updateParticles(dt);
-    this.shake = Math.max(0, this.shake - dt * 20);
 
     if (this.report.hp <= 0) {
       this.finish('manager');
@@ -232,19 +326,78 @@ export class ArenaGame {
     const victor = winner === 'manager' ? this.manager : this.report;
     loser.action = 'down';
     victor.action = 'win';
+    victor.vx = 0;
+    this.slowMo = 0.25;
+    this.hitStop = 0.25;
+    this.flash = 0.25;
+    this.shake = 14;
     this.burst(loser.x, loser.y - 90, 40, '#f59e0b');
+    // The rest of their access rains out on the floor.
+    const names = loser.stats.entitlementNames;
+    for (let i = 0; i < Math.min(14, Math.max(4, names.length)); i++) {
+      const name = names.length ? names[(loser.nextEntitlement + i) % names.length] : 'entitlement';
+      this.particles.push({
+        x: loser.x,
+        y: loser.y - 100,
+        vx: (Math.random() - 0.5) * 520,
+        vy: -300 - Math.random() * 300,
+        life: 1.6 + Math.random() * 0.8,
+        text: name,
+        color: '#fde68a',
+        size: 13,
+        spin: (Math.random() - 0.5) * 6,
+      });
+    }
+    this.announce(victor.tookDamage ? 'K.O.' : 'PERFECT K.O.', '#fbbf24', 2.5);
+    this.sound('ko');
     this.events.onEnd(winner);
+  }
+
+  private airborne(f: Fighter): boolean {
+    return f.y < FLOOR_Y - 0.5 || f.vy < 0;
   }
 
   private applyInput(f: Fighter, input: Input, dt: number): void {
     if (f.actionTimer > 0) {
       f.actionTimer -= dt;
       if (f.actionTimer <= 0) {
-        f.action = 'idle';
+        f.action = this.airborne(f) ? 'jump' : 'idle';
         f.actionTimer = 0;
       }
     }
-    const busy = f.action === 'punch' || f.action === 'hit';
+
+    // In the air you can only kick, once.
+    if (this.airborne(f)) {
+      if (f.action === 'jump' && input.punch) {
+        f.action = 'kick';
+        f.actionTimer = KICK_TIME;
+        f.attackLanded = false;
+        this.sound('kick');
+      }
+      return;
+    }
+
+    // Holding the attack button winds up a heavy. Releasing decides which one fires.
+    if (f.action === 'charge') {
+      f.vx = 0;
+      if (input.punchHeld) {
+        f.chargeTime += dt;
+        return;
+      }
+      if (f.chargeTime >= f.chargeThreshold) {
+        f.action = 'heavy';
+        f.actionTimer = HEAVY_TIME;
+        this.sound('heavy');
+      } else {
+        f.action = 'punch';
+        f.actionTimer = PUNCH_TIME;
+        this.sound('whoosh');
+      }
+      f.attackLanded = false;
+      return;
+    }
+
+    const busy = f.action === 'punch' || f.action === 'heavy' || f.action === 'hit' || f.action === 'kick';
     if (busy) {
       f.vx = 0;
       return;
@@ -260,10 +413,18 @@ export class ArenaGame {
     }
 
     if (input.punch) {
-      f.action = 'punch';
-      f.actionTimer = PUNCH_TIME;
-      f.punchLanded = false;
+      f.action = 'charge';
+      f.chargeTime = 0;
       f.vx = 0;
+      return;
+    }
+
+    if (input.up) {
+      f.vy = -JUMP_V;
+      f.action = 'jump';
+      f.actionTimer = 0;
+      f.vx = (input.left ? -WALK_SPEED : 0) + (input.right ? WALK_SPEED : 0);
+      this.sound('jump');
       return;
     }
 
@@ -273,21 +434,38 @@ export class ArenaGame {
     f.action = f.vx !== 0 ? 'walk' : 'idle';
   }
 
-  private move(f: Fighter, dt: number): void {
+  private applyPhysics(f: Fighter, dt: number): void {
     f.x += f.vx * dt;
     f.x = Math.max(40, Math.min(ARENA_W - 40, f.x));
+
+    if (this.airborne(f) || f.vy !== 0) {
+      f.vy += GRAVITY * dt;
+      f.y += f.vy * dt;
+      if (f.y >= FLOOR_Y) {
+        f.y = FLOOR_Y;
+        f.vy = 0;
+        if (f.action === 'jump' || f.action === 'kick') {
+          f.action = 'idle';
+          f.actionTimer = 0;
+        }
+      }
+    }
+
     if (f.action === 'walk') {
       f.phase += dt * 10;
     }
     const other = f === this.manager ? this.report : this.manager;
-    f.facing = other.x >= f.x ? 1 : -1;
+    if (f.action !== 'down') {
+      f.facing = other.x >= f.x ? 1 : -1;
+    }
   }
 
   /** Keep the two bodies from overlapping. */
   private separate(): void {
     const minGap = 36;
     const gap = Math.abs(this.manager.x - this.report.x);
-    if (gap < minGap) {
+    const verticalGap = Math.abs(this.manager.y - this.report.y);
+    if (gap < minGap && verticalGap < 60) {
       const push = (minGap - gap) / 2;
       if (this.manager.x < this.report.x) {
         this.manager.x -= push;
@@ -299,57 +477,148 @@ export class ArenaGame {
     }
   }
 
-  private resolvePunch(attacker: Fighter, target: Fighter): void {
-    if (attacker.action !== 'punch' || attacker.punchLanded) {
+  private resolveAttack(attacker: Fighter, target: Fighter): void {
+    let total: number;
+    let hitAt: number;
+    let kind: 'punch' | 'heavy' | 'kick';
+    switch (attacker.action) {
+      case 'punch':
+        total = PUNCH_TIME; hitAt = PUNCH_HIT_AT; kind = 'punch';
+        break;
+      case 'heavy':
+        total = HEAVY_TIME; hitAt = HEAVY_HIT_AT; kind = 'heavy';
+        break;
+      case 'kick':
+        total = KICK_TIME; hitAt = KICK_HIT_AT; kind = 'kick';
+        break;
+      default:
+        return;
+    }
+    if (attacker.attackLanded) {
       return;
     }
-    const elapsed = PUNCH_TIME - attacker.actionTimer;
-    if (elapsed < PUNCH_HIT_AT) {
+    const elapsed = total - attacker.actionTimer;
+    if (elapsed < hitAt) {
       return;
     }
-    attacker.punchLanded = true;
+    attacker.attackLanded = true;
 
     const dist = Math.abs(target.x - attacker.x);
     const inFront = Math.sign(target.x - attacker.x) === attacker.facing;
-    if (!inFront || dist > attacker.reach + 20) {
+    const reach = kind === 'kick' ? attacker.reach + 10 : kind === 'heavy' ? attacker.reach + 16 : attacker.reach;
+    const vertical = Math.abs(target.y - attacker.y);
+    if (!inFront || dist > reach + 20 || vertical > 90) {
       return;
     }
 
     let amount = attacker.damage;
-    const blocked = target.action === 'block' && target.facing === -attacker.facing;
+    if (kind === 'heavy') amount = Math.round(amount * 2.5);
+    if (kind === 'kick') amount += 1;
+
+    // Blocks stop punches. Heavies break through; jump kicks come in over the top.
+    const guarding = target.action === 'block' && target.facing === -attacker.facing;
+    const blocked = guarding && kind === 'punch';
+    const guardBroken = guarding && !blocked;
     if (blocked) {
       amount = Math.max(1, Math.round(amount * BLOCK_DAMAGE_MULT));
     }
 
+    // Catching someone mid wind-up is a counter.
+    const counter = target.action === 'charge' || target.action === 'punch' || target.action === 'heavy';
+
     if (target.armour > 0 && !blocked) {
       target.armour -= 1;
       this.events.onHit(target.side, 0, true);
-      this.spawnText(target.x, target.y - 120, 'ROLE ABSORBED', '#60a5fa');
+      this.spawnText(target.x, target.y - 130, 'ROLE ABSORBED', '#60a5fa');
       this.burst(target.x, target.y - 80, 8, '#60a5fa');
+      this.sound('armour');
+      this.hitStop = 0.05;
     } else {
       target.hp = Math.max(0, target.hp - amount);
+      target.tookDamage = true;
       this.events.onHit(target.side, amount, false);
-      this.spawnText(target.x, target.y - 120, `-${amount}`, blocked ? '#9ca3af' : '#ef4444');
-      this.burst(target.x, target.y - 80, blocked ? 4 : 12, blocked ? '#9ca3af' : '#ef4444');
-      this.shake = blocked ? 2 : 6;
+      this.spawnText(target.x, target.y - 130, `-${amount}`, blocked ? '#9ca3af' : '#ef4444');
+      this.burst(target.x, target.y - 80, blocked ? 4 : kind === 'heavy' ? 20 : 12, blocked ? '#9ca3af' : '#ef4444');
+      this.shake = blocked ? 2 : kind === 'heavy' ? 12 : 6;
+      if (!blocked) {
+        this.knockEntitlementLoose(target, kind === 'heavy' ? 3 : 1);
+        this.hitStop = kind === 'heavy' ? 0.12 : 0.06;
+        this.flash = kind === 'heavy' ? 0.1 : 0.04;
+      }
+      this.sound(blocked ? 'block' : kind === 'heavy' ? 'heavy' : 'hit');
     }
 
     if (!blocked) {
       target.action = 'hit';
-      target.actionTimer = HIT_STUN;
-      target.x += attacker.facing * 18;
+      target.actionTimer = kind === 'heavy' ? HEAVY_STUN : HIT_STUN;
+      target.x += attacker.facing * (kind === 'heavy' ? 40 : 18);
+      if (kind === 'heavy') {
+        target.vy = -260;
+      }
+      // Getting hit drops your own combo.
+      target.combo = 0;
+      target.comboTimer = 0;
+    } else {
+      this.sound('block');
+    }
+
+    // Combo bookkeeping and announcer calls.
+    attacker.combo += 1;
+    attacker.comboTimer = COMBO_WINDOW;
+    attacker.bestCombo = Math.max(attacker.bestCombo, attacker.combo);
+    if (guardBroken) {
+      this.announce('GUARD BREAK', '#f97316', 0.9);
+    } else if (counter) {
+      this.announce('COUNTER', '#a78bfa', 0.9);
+    } else if (attacker.combo >= 2) {
+      this.announce(`${attacker.combo} HIT COMBO`, attacker.combo >= 4 ? '#fbbf24' : '#f8fafc', 0.9);
+      if (attacker.combo >= 3) this.sound('combo');
     }
   }
 
-  /** The report's brain: approach, poke, occasionally block, occasionally back off. */
+  private tickCombo(f: Fighter, dt: number): void {
+    if (f.comboTimer > 0) {
+      f.comboTimer -= dt;
+      if (f.comboTimer <= 0) {
+        f.combo = 0;
+      }
+    }
+  }
+
+  /** Pops real entitlement names off the target so the hits read as access being stripped. */
+  private knockEntitlementLoose(target: Fighter, count: number): void {
+    const names = target.stats.entitlementNames;
+    if (!names.length) return;
+    for (let i = 0; i < count; i++) {
+      const name = names[target.nextEntitlement % names.length];
+      target.nextEntitlement += 1;
+      this.particles.push({
+        x: target.x,
+        y: target.y - 100,
+        vx: -target.facing * (160 + Math.random() * 200) + (Math.random() - 0.5) * 120,
+        vy: -260 - Math.random() * 200,
+        life: 1.4 + Math.random() * 0.4,
+        text: name,
+        color: '#fde68a',
+        size: 13,
+        spin: (Math.random() - 0.5) * 5,
+      });
+    }
+  }
+
+  /** The report's brain: approach, poke, occasionally block, jump or wind up a heavy. */
   private botInput(dt: number): Input {
     const bot = this.report;
     const me = this.manager;
-    const none: Input = { left: false, right: false, punch: false, block: false };
     bot.thinkTimer -= dt;
     const dist = Math.abs(me.x - bot.x);
     const towards = me.x > bot.x ? 'right' : 'left';
     const away = towards === 'right' ? 'left' : 'right';
+
+    // Keep holding while a heavy winds up, then let go.
+    if (bot.action === 'charge') {
+      return { ...NO_INPUT, punchHeld: bot.chargeTime < bot.chargeThreshold + 0.05 };
+    }
 
     if (bot.thinkTimer <= 0) {
       bot.thinkTimer = 0.25 + Math.random() * 0.45;
@@ -359,34 +628,49 @@ export class ArenaGame {
       bot.plan = roll < aggression ? 'approach' : roll < aggression + 0.25 ? 'wait' : 'retreat';
     }
 
-    // Block when the player is winding up in range.
-    if (me.action === 'punch' && dist < me.reach + 30 && Math.random() < 0.6) {
-      return { ...none, block: true };
+    // Block when the player is winding up in range, unless it is a heavy, then hop away.
+    const playerWindingUp = me.action === 'punch' || me.action === 'charge' || me.action === 'heavy';
+    if (playerWindingUp && dist < me.reach + 40) {
+      if (me.action === 'charge' && me.chargeTime > 0.2 && Math.random() < 0.5) {
+        return { ...NO_INPUT, up: true, [away]: true };
+      }
+      if (Math.random() < 0.6) {
+        return { ...NO_INPUT, block: true };
+      }
     }
 
-    if (dist <= bot.reach - 4 && bot.action !== 'punch' && Math.random() < 0.08) {
-      return { ...none, punch: true };
+    if (dist <= bot.reach - 4 && bot.action !== 'punch' && bot.action !== 'heavy') {
+      const roll = Math.random();
+      if (roll < 0.08) return { ...NO_INPUT, punch: true, punchHeld: false };
+      // The bot winds up a heavy now and then when the player is blocking a lot.
+      if (roll < 0.1 && me.action === 'block') return { ...NO_INPUT, punch: true, punchHeld: true };
+    }
+
+    // Occasional jump kick from mid range.
+    if (dist > bot.reach && dist < 200 && bot.action === 'idle' && Math.random() < 0.01) {
+      return { ...NO_INPUT, up: true, [towards]: true, punch: true };
     }
 
     switch (bot.plan) {
       case 'approach':
-        return dist > bot.reach - 10 ? { ...none, [towards]: true } : none;
+        return dist > bot.reach - 10 ? { ...NO_INPUT, [towards]: true } : NO_INPUT;
       case 'retreat':
-        return dist < 180 ? { ...none, [away]: true } : none;
+        return dist < 180 ? { ...NO_INPUT, [away]: true } : NO_INPUT;
       default:
-        return none;
+        return NO_INPUT;
     }
   }
 
   private updateMinions(dt: number): void {
     const target = this.report.x - this.report.facing * -30;
+    const swarming = this.manager.action === 'punch' || this.manager.action === 'heavy' || this.manager.action === 'kick';
     for (const m of this.minions) {
       if (this.ended) {
         m.vx = 0;
         continue;
       }
       // They jog toward the report, bump them, then scurry back.
-      const goal = this.manager.action === 'punch' ? target : 40 + this.minions.indexOf(m) * 18;
+      const goal = swarming ? target : 40 + this.minions.indexOf(m) * 18;
       const dir = Math.sign(goal - m.x);
       m.vx = dir * 160;
       m.x += m.vx * dt;
@@ -400,6 +684,13 @@ export class ArenaGame {
       p.y += p.vy * dt;
       p.vy += 500 * dt;
       p.life -= dt;
+      // Text lands on the floor and slides to a stop.
+      if (p.text && p.size && p.y > FLOOR_Y + 30) {
+        p.y = FLOOR_Y + 30;
+        p.vy = -Math.abs(p.vy) * 0.3;
+        p.vx *= 0.6;
+        p.spin = 0;
+      }
     }
     for (let i = this.particles.length - 1; i >= 0; i--) {
       if (this.particles[i].life <= 0) this.particles.splice(i, 1);
@@ -418,6 +709,14 @@ export class ArenaGame {
     }
   }
 
+  private announce(text: string, color: string, life: number): void {
+    this.announcement = { text, color, life, maxLife: life };
+  }
+
+  private sound(name: SoundName): void {
+    this.events.onSound?.(name);
+  }
+
   // ───────────────────────────── Drawing ─────────────────────────────
 
   draw(ctx: CanvasRenderingContext2D): void {
@@ -427,10 +726,16 @@ export class ArenaGame {
     }
     this.drawBackground(ctx);
     for (const m of this.minions) this.drawMinion(ctx, m);
+    this.drawShadow(ctx, this.manager);
+    this.drawShadow(ctx, this.report);
     this.drawFighter(ctx, this.manager);
     this.drawFighter(ctx, this.report);
     this.drawParticles(ctx);
     ctx.restore();
+    if (this.flash > 0) {
+      ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.85, this.flash * 8)})`;
+      ctx.fillRect(0, 0, ARENA_W, ARENA_H);
+    }
     this.drawHud(ctx);
   }
 
@@ -462,6 +767,15 @@ export class ArenaGame {
     ctx.fillRect(0, FLOOR_Y, ARENA_W, 4);
   }
 
+  private drawShadow(ctx: CanvasRenderingContext2D, f: Fighter): void {
+    const height = FLOOR_Y - f.y;
+    const scale = Math.max(0.4, 1 - height / 400);
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.45)';
+    ctx.beginPath();
+    ctx.ellipse(f.x, FLOOR_Y + 4, 26 * scale, 7 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   private drawFighter(ctx: CanvasRenderingContext2D, f: Fighter): void {
     const { x, y } = f;
     const color = f.side === 'left' ? '#38bdf8' : '#fb7185';
@@ -479,18 +793,31 @@ export class ArenaGame {
 
     const walk = f.action === 'walk' ? Math.sin(f.phase) : 0;
     const bob = f.action === 'win' ? Math.abs(Math.sin(performance.now() / 120)) * 10 : 0;
-    const hipY = -60 - bob;
-    const shoulderY = -105 - bob;
-    const headY = -128 - bob;
+    const charging = f.action === 'charge';
+    const chargeFrac = charging ? Math.min(1, f.chargeTime / f.chargeThreshold) : 0;
+    const crouch = charging ? chargeFrac * 10 : 0;
+    const hipY = -60 - bob + crouch;
+    const shoulderY = -105 - bob + crouch;
+    const headY = -128 - bob + crouch;
 
     // Legs
     ctx.beginPath();
-    ctx.moveTo(0, hipY);
-    ctx.lineTo(-14 + walk * 14, -30 - bob);
-    ctx.lineTo(-18 + walk * 18, 0);
-    ctx.moveTo(0, hipY);
-    ctx.lineTo(14 - walk * 14, -30 - bob);
-    ctx.lineTo(18 - walk * 18, 0);
+    if (f.action === 'jump' || f.action === 'kick') {
+      const kick = f.action === 'kick';
+      ctx.moveTo(0, hipY);
+      ctx.lineTo(kick ? 26 : 10, kick ? hipY + 6 : hipY + 24);
+      ctx.lineTo(kick ? 56 : 18, kick ? hipY - 2 : hipY + 14);
+      ctx.moveTo(0, hipY);
+      ctx.lineTo(-12, hipY + 22);
+      ctx.lineTo(-4, hipY + 40);
+    } else {
+      ctx.moveTo(0, hipY);
+      ctx.lineTo(-14 + walk * 14, -30 - bob + crouch);
+      ctx.lineTo(-18 + walk * 18, 0);
+      ctx.moveTo(0, hipY);
+      ctx.lineTo(14 - walk * 14, -30 - bob + crouch);
+      ctx.lineTo(18 - walk * 18, 0);
+    }
     ctx.stroke();
 
     // Torso
@@ -501,9 +828,13 @@ export class ArenaGame {
 
     // Arms
     ctx.beginPath();
-    if (f.action === 'punch') {
-      const t = 1 - f.actionTimer / PUNCH_TIME;
-      const ext = Math.sin(Math.min(1, t * 1.6) * Math.PI) * f.reach;
+    if (f.action === 'punch' || f.action === 'heavy') {
+      const heavy = f.action === 'heavy';
+      const total = heavy ? HEAVY_TIME : PUNCH_TIME;
+      const t = 1 - f.actionTimer / total;
+      // Heavies wind back first, then swing through.
+      const swing = heavy ? (t < 0.5 ? -0.5 * (t / 0.5) : Math.sin(((t - 0.5) / 0.5) * Math.PI)) : Math.sin(Math.min(1, t * 1.6) * Math.PI);
+      const ext = swing * (f.reach + (heavy ? 16 : 0));
       ctx.moveTo(0, shoulderY + 4);
       ctx.lineTo(ext * 0.5, shoulderY + 2);
       ctx.lineTo(ext, shoulderY);
@@ -512,7 +843,22 @@ export class ArenaGame {
       ctx.lineTo(-6, shoulderY + 40);
       ctx.stroke();
       // Weapon: scales with privileged access.
-      this.drawWeapon(ctx, f, ext, shoulderY);
+      if (ext > 0) this.drawWeapon(ctx, f, ext, shoulderY, heavy);
+    } else if (charging) {
+      // Fist pulled back, shaking harder the longer it is held.
+      const jitter = (Math.random() - 0.5) * chargeFrac * 6;
+      ctx.moveTo(0, shoulderY + 4);
+      ctx.lineTo(-18, shoulderY + 10 + jitter);
+      ctx.lineTo(-30, shoulderY - 2 + jitter);
+      ctx.moveTo(0, shoulderY + 4);
+      ctx.lineTo(14, shoulderY + 24);
+      ctx.lineTo(10, shoulderY + 10);
+      ctx.stroke();
+      // Charge glow
+      ctx.fillStyle = `rgba(251, 191, 36, ${0.2 + chargeFrac * 0.6})`;
+      ctx.beginPath();
+      ctx.arc(-30, shoulderY - 2 + jitter, 6 + chargeFrac * 10, 0, Math.PI * 2);
+      ctx.fill();
     } else if (f.action === 'block') {
       ctx.moveTo(0, shoulderY + 4);
       ctx.lineTo(16, shoulderY + 20);
@@ -534,6 +880,14 @@ export class ArenaGame {
       ctx.lineTo(18, shoulderY - 20);
       ctx.lineTo(22, shoulderY - 44);
       ctx.stroke();
+    } else if (f.action === 'jump' || f.action === 'kick') {
+      ctx.moveTo(0, shoulderY + 4);
+      ctx.lineTo(-16, shoulderY - 10);
+      ctx.lineTo(-24, shoulderY - 30);
+      ctx.moveTo(0, shoulderY + 4);
+      ctx.lineTo(16, shoulderY + 10);
+      ctx.lineTo(24, shoulderY - 6);
+      ctx.stroke();
     } else {
       const swing = walk * 12;
       ctx.moveTo(0, shoulderY + 4);
@@ -546,19 +900,26 @@ export class ArenaGame {
     }
 
     // Head: the avatar. Undo the facing flip so faces are not mirrored.
+    // Squash on impact, stretch in the air.
     ctx.save();
     ctx.translate(0, headY);
     ctx.scale(f.facing, 1);
-    drawAvatar(ctx, f.stats, 24, f.action === 'hit' || down);
+    if (f.action === 'hit') {
+      ctx.scale(1.2, 0.85);
+    } else if (f.action === 'jump' || f.action === 'kick') {
+      ctx.scale(0.9, 1.12);
+    }
+    drawAvatar(ctx, f.stats, 24, f.action === 'hit' || down, charging || f.action === 'heavy');
     ctx.restore();
 
     ctx.restore();
   }
 
-  private drawWeapon(ctx: CanvasRenderingContext2D, f: Fighter, ext: number, shoulderY: number): void {
+  private drawWeapon(ctx: CanvasRenderingContext2D, f: Fighter, ext: number, shoulderY: number, heavy: boolean): void {
     const priv = f.stats.privilegedCount;
     ctx.save();
     ctx.translate(ext, shoulderY);
+    if (heavy) ctx.scale(1.3, 1.3);
     if (priv === 0) {
       // A wet noodle.
       ctx.strokeStyle = '#fde68a';
@@ -618,10 +979,20 @@ export class ArenaGame {
     for (const p of this.particles) {
       ctx.globalAlpha = Math.max(0, Math.min(1, p.life * 2));
       if (p.text) {
-        ctx.font = 'bold 20px system-ui, sans-serif';
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        if (p.spin) ctx.rotate(p.spin * p.life);
+        ctx.font = `bold ${p.size ?? 20}px system-ui, sans-serif`;
         ctx.textAlign = 'center';
+        if (p.size) {
+          // Entitlement tags get a little chip behind them so they read on any background.
+          const w = ctx.measureText(p.text).width + 12;
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
+          ctx.fillRect(-w / 2, -p.size, w, p.size + 6);
+        }
         ctx.fillStyle = p.color;
-        ctx.fillText(p.text, p.x, p.y);
+        ctx.fillText(p.text, 0, 0);
+        ctx.restore();
       } else {
         ctx.fillStyle = p.color;
         ctx.fillRect(p.x - 3, p.y - 3, 6, 6);
@@ -640,6 +1011,23 @@ export class ArenaGame {
     ctx.fillStyle = '#f8fafc';
     ctx.fillText(String(Math.ceil(this.timeLeft)), ARENA_W / 2, 46);
 
+    if (this.announcement) {
+      const a = this.announcement;
+      const t = 1 - a.life / a.maxLife;
+      const scale = t < 0.15 ? 0.6 + (t / 0.15) * 0.5 : 1.1 - Math.min(0.1, (t - 0.15) * 0.3);
+      ctx.save();
+      ctx.translate(ARENA_W / 2, 110);
+      ctx.scale(scale, scale);
+      ctx.globalAlpha = a.life < 0.25 ? a.life / 0.25 : 1;
+      ctx.font = 'bold 36px system-ui, sans-serif';
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = '#0f172a';
+      ctx.strokeText(a.text, 0, 0);
+      ctx.fillStyle = a.color;
+      ctx.fillText(a.text, 0, 0);
+      ctx.restore();
+    }
+
     if (this.introTimer > 0) {
       const t = this.introTimer;
       ctx.font = 'bold 64px system-ui, sans-serif';
@@ -656,8 +1044,9 @@ export class ArenaGame {
       ctx.fillText(line, ARENA_W / 2, ARENA_H / 2 + 8);
       ctx.font = '18px system-ui, sans-serif';
       ctx.fillStyle = '#e2e8f0';
+      const victor = this.winner === 'manager' ? this.manager : this.report;
       const sub = this.winner === 'manager'
-        ? `${this.report.stats.name} has been bested in single combat.`
+        ? `${this.report.stats.name} has been bested in single combat. Best combo: ${victor.bestCombo}.`
         : `${this.report.stats.name} keeps their job. Try again next quarter.`;
       ctx.fillText(sub, ARENA_W / 2, ARENA_H / 2 + 40);
     }
@@ -685,13 +1074,28 @@ export class ArenaGame {
       ctx.fillRect(px, y + h + 6, 10, 6);
     }
 
+    // Charge meter while winding up a heavy.
+    if (f.action === 'charge') {
+      const frac2 = Math.min(1, f.chargeTime / f.chargeThreshold);
+      ctx.fillStyle = '#1f2937';
+      ctx.fillRect(x, y + h + 16, w, 4);
+      ctx.fillStyle = frac2 >= 1 ? '#fbbf24' : '#f97316';
+      ctx.fillRect(rightAligned ? x + w - w * frac2 : x, y + h + 16, w * frac2, 4);
+    }
+
     ctx.font = 'bold 15px system-ui, sans-serif';
     ctx.textAlign = rightAligned ? 'right' : 'left';
     ctx.fillStyle = '#f8fafc';
-    ctx.fillText(f.stats.name, rightAligned ? x + w : x, y + h + 30);
+    ctx.fillText(f.stats.name, rightAligned ? x + w : x, y + h + 36);
     ctx.font = '12px system-ui, sans-serif';
     ctx.fillStyle = '#cbd5e1';
-    ctx.fillText(`${f.hp}/${f.maxHp} HP · ${f.stats.subtitle}`, rightAligned ? x + w : x, y + h + 46);
+    ctx.fillText(`${f.hp}/${f.maxHp} HP · ${f.stats.subtitle}`, rightAligned ? x + w : x, y + h + 52);
+
+    if (f.combo >= 2) {
+      ctx.font = 'bold 14px system-ui, sans-serif';
+      ctx.fillStyle = '#fbbf24';
+      ctx.fillText(`${f.combo} HIT`, rightAligned ? x + w : x, y + h + 70);
+    }
   }
 }
 
@@ -700,7 +1104,7 @@ export class ArenaGame {
  * a stable seed (email). Skin, hair, glasses and expression are all derived
  * from it, which also means the same person always looks the same.
  */
-export function drawAvatar(ctx: CanvasRenderingContext2D, stats: FighterStats, r: number, hurt: boolean): void {
+export function drawAvatar(ctx: CanvasRenderingContext2D, stats: FighterStats, r: number, hurt: boolean, angry = false): void {
   const rand = rng(hashSeed(stats.seed));
   const skins = ['#f5d0b5', '#e8b894', '#c68642', '#8d5524', '#ffdbac', '#a0673d'];
   const hairs = ['#111827', '#3f2a14', '#b45309', '#eab308', '#9ca3af', '#7c2d12', '#dc2626'];
@@ -744,6 +1148,33 @@ export function drawAvatar(ctx: CanvasRenderingContext2D, stats: FighterStats, r
     ctx.fill();
   }
 
+  // A crown for the truly privileged.
+  if (stats.privilegedCount >= 4) {
+    ctx.fillStyle = '#fbbf24';
+    ctx.beginPath();
+    ctx.moveTo(-14, -r + 2);
+    ctx.lineTo(-14, -r - 12);
+    ctx.lineTo(-7, -r - 4);
+    ctx.lineTo(0, -r - 14);
+    ctx.lineTo(7, -r - 4);
+    ctx.lineTo(14, -r - 12);
+    ctx.lineTo(14, -r + 2);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Eyebrows: angled down when angry.
+  if (angry && !hurt) {
+    ctx.strokeStyle = '#111827';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(-13, -11);
+    ctx.lineTo(-4, -7);
+    ctx.moveTo(13, -11);
+    ctx.lineTo(4, -7);
+    ctx.stroke();
+  }
+
   // Eyes
   ctx.fillStyle = '#111827';
   if (hurt) {
@@ -782,6 +1213,9 @@ export function drawAvatar(ctx: CanvasRenderingContext2D, stats: FighterStats, r
   ctx.beginPath();
   if (hurt) {
     ctx.arc(0, 12, 5, 0, Math.PI * 2);
+  } else if (angry) {
+    ctx.moveTo(-7, 10);
+    ctx.lineTo(7, 10);
   } else {
     ctx.arc(0, 6, 7, 0.15 * Math.PI, 0.85 * Math.PI);
   }

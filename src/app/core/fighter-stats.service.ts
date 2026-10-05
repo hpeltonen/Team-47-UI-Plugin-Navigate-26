@@ -19,6 +19,8 @@ export interface IdentityCombatProfile {
   lifecycleState: string;
   identityProfileId: string;
   identityProfileName: string;
+  /** Entitlement display names, for the arena to knock loose on hits. */
+  entitlementNames: string[];
 }
 
 /** Shape of the fields we read from a Search identity document. */
@@ -32,7 +34,7 @@ interface IdentitySearchDoc {
   accessProfileCount?: number;
   accessCount?: number;
   accounts?: unknown[];
-  access?: Array<{ type?: string; privileged?: boolean }>;
+  access?: Array<{ type?: string; privileged?: boolean; name?: string; displayName?: string }>;
   identityProfile?: { id?: string; name?: string };
   attributes?: { cloudLifecycleState?: string };
 }
@@ -92,6 +94,10 @@ export class FighterStatsService {
       lifecycleState: doc.attributes?.cloudLifecycleState ?? '',
       identityProfileId: doc.identityProfile?.id ?? '',
       identityProfileName: doc.identityProfile?.name ?? '',
+      entitlementNames: access
+        .filter((a) => a.type === 'ENTITLEMENT')
+        .map((a) => a.displayName || a.name || '')
+        .filter(Boolean),
     };
   }
 

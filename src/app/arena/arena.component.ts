@@ -10,7 +10,8 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
-import { ARENA_H, ARENA_W, ArenaGame, type FighterStats, type Input, type Outcome } from './game';
+import { ARENA_H, ARENA_W, ArenaGame, NO_INPUT, type FighterStats, type Input, type Outcome } from './game';
+import { Sfx } from './sfx';
 
 /**
  * Canvas host for the arena. Owns the requestAnimationFrame loop and the
@@ -26,12 +27,14 @@ import { ARENA_H, ARENA_W, ArenaGame, type FighterStats, type Input, type Outcom
         [width]="w"
         [height]="h"
         tabindex="0"
-        aria-label="Access Arena. Arrow keys move, space punches, shift blocks."
+        aria-label="Access Arena. Arrow keys move, up jumps, space punches or kicks in the air, hold space for a heavy, shift blocks."
       ></canvas>
       <div class="arena__controls">
         <span><kbd>←</kbd> <kbd>→</kbd> move</span>
-        <span><kbd>Space</kbd> punch</span>
+        <span><kbd>↑</kbd> jump</span>
+        <span><kbd>Space</kbd> punch · in the air: kick · hold: heavy</span>
         <span><kbd>Shift</kbd> block</span>
+        <button type="button" class="arena__mute" (click)="toggleMute()">{{ muted() ? 'Sound off' : 'Sound on' }}</button>
         @if (!focused()) {
           <span class="arena__focus-hint">Click the arena to take control</span>
         }
@@ -63,6 +66,17 @@ import { ARENA_H, ARENA_W, ArenaGame, type FighterStats, type Input, type Outcom
       color: var(--spds-text-muted-color);
       font-size: 0.9rem;
     }
+    .arena__mute {
+      margin-left: auto;
+      padding: 0.1rem 0.6rem;
+      border: 1px solid var(--spds-content-border-color);
+      border-radius: 999px;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      font-size: 0.85em;
+      cursor: pointer;
+    }
     .arena__focus-hint {
       color: #f59e0b;
       font-weight: 600;
@@ -87,13 +101,16 @@ export class ArenaComponent implements AfterViewInit, OnDestroy {
   protected readonly w = ARENA_W;
   protected readonly h = ARENA_H;
   protected readonly focused = signal(false);
+  protected readonly muted = signal(false);
+  private readonly sfx = new Sfx();
 
   private readonly canvas = viewChild.required<ElementRef<HTMLCanvasElement>>('canvas');
   private game: ArenaGame | null = null;
   private raf = 0;
   private last = 0;
-  private readonly keys: Input = { left: false, right: false, punch: false, block: false };
+  private readonly keys: Input = { ...NO_INPUT };
   private punchQueued = false;
+  private jumpQueued = false;
   private readonly cleanups: Array<() => void> = [];
 
   constructor(private readonly zone: NgZone) {
@@ -120,6 +137,13 @@ export class ArenaComponent implements AfterViewInit, OnDestroy {
     this.stop();
   }
 
+  protected toggleMute(): void {
+    this.muted.update((m) => !m);
+    this.sfx.muted = this.muted();
+    if (!this.sfx.muted) this.sfx.unlock();
+    this.canvas().nativeElement.focus();
+  }
+
   private start(manager: FighterStats, report: FighterStats): void {
     this.stop();
     const el = this.canvas().nativeElement;
@@ -131,6 +155,7 @@ export class ArenaComponent implements AfterViewInit, OnDestroy {
     this.game = new ArenaGame(manager, report, {
       onHit: () => {},
       onEnd: (winner) => this.zone.run(() => this.ended.emit(winner)),
+      onSound: (name) => this.sfx.play(name),
     });
 
     this.zone.runOutsideAngular(() => {
@@ -138,6 +163,7 @@ export class ArenaComponent implements AfterViewInit, OnDestroy {
         if (document.activeElement !== el) {
           return;
         }
+        if (down) this.sfx.unlock();
         let handled = true;
         switch (ev.key) {
           case 'ArrowLeft':
@@ -150,10 +176,16 @@ export class ArenaComponent implements AfterViewInit, OnDestroy {
           case 'D':
             this.keys.right = down;
             break;
+          case 'ArrowUp':
+          case 'w':
+          case 'W':
+            if (down && !ev.repeat) this.jumpQueued = true;
+            break;
           case ' ':
           case 'j':
           case 'J':
             if (down && !ev.repeat) this.punchQueued = true;
+            this.keys.punchHeld = down;
             break;
           case 'Shift':
           case 'k':
@@ -169,9 +201,12 @@ export class ArenaComponent implements AfterViewInit, OnDestroy {
       };
       const keydown = onKey(true);
       const keyup = onKey(false);
-      const onFocus = () => this.zone.run(() => this.focused.set(true));
+      const onFocus = () => {
+        this.sfx.unlock();
+        this.zone.run(() => this.focused.set(true));
+      };
       const onBlur = () => {
-        this.keys.left = this.keys.right = this.keys.block = false;
+        this.keys.left = this.keys.right = this.keys.block = this.keys.punchHeld = false;
         this.zone.run(() => this.focused.set(false));
       };
       window.addEventListener('keydown', keydown);
@@ -196,8 +231,9 @@ export class ArenaComponent implements AfterViewInit, OnDestroy {
         if (!game) {
           return;
         }
-        const input: Input = { ...this.keys, punch: this.punchQueued };
+        const input: Input = { ...this.keys, punch: this.punchQueued, up: this.jumpQueued };
         this.punchQueued = false;
+        this.jumpQueued = false;
         game.step(dt, input);
         game.draw(ctx);
         this.raf = requestAnimationFrame(frame);
